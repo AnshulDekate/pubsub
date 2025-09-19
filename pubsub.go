@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -13,20 +14,19 @@ const (
 	TopicHistoryBufferSize = 1000 // Default ring buffer size per topic for message history
 )
 
-// PubSubClient represents a client in the pub-sub system
-type PubSubClient struct {
-	ClientID   string
-	Buffer     *RingBuffer        // Per-client ring buffer for concurrency/backpressure
-	WriteChan  chan EventResponse // Channel to send messages to client's write pump
-	LastActive time.Time
-	Connected  bool
+// ClientInterface defines the interface for WebSocket clients
+type ClientInterface interface {
+	GetClientID() string
+	IsConnected() bool
+	SendMessage(EventResponse) error
+	GetLastActive() time.Time
 }
 
-// Subscriber represents a client subscribed to a topic (just a link)
+// Subscriber represents a client subscribed to a topic
 type Subscriber struct {
 	ClientID string
 	Topic    string
-	Client   *PubSubClient // Reference to the actual client
+	Client   ClientInterface // Reference to the WebSocket client
 }
 
 // Topic represents a chat room topic
@@ -43,9 +43,6 @@ type Topic struct {
 type PubSubSystem struct {
 	// Topic -> client_ids mapping for fan-out
 	topics map[string]*Topic
-
-	// client_id -> PubSubClient mapping (separate client registry)
-	clients map[string]*PubSubClient
 
 	// client_id -> set of topics mapping (client can subscribe to multiple topics)
 	clientTopics map[string]map[string]bool
@@ -64,7 +61,6 @@ type PubSubSystem struct {
 func NewPubSubSystem() *PubSubSystem {
 	return &PubSubSystem{
 		topics:       make(map[string]*Topic),
-		clients:      make(map[string]*PubSubClient),
 		clientTopics: make(map[string]map[string]bool),
 		startTime:    time.Now(),
 	}
@@ -110,16 +106,17 @@ func (ps *PubSubSystem) DeleteTopic(name string) error {
 			Timestamp: time.Now(),
 		}
 
-		// Try to send notice, don't block if client is slow
-		select {
-		case subscriber.Client.WriteChan <- EventResponse{
+		// Send notice to client
+		noticeEvent := EventResponse{
 			Type:      notice.Type,
 			Topic:     notice.Topic,
 			Message:   MessageData{ID: uuid.New().String(), Payload: notice.Message},
 			Timestamp: notice.Timestamp,
-		}:
-		default:
-			// Client write channel is full, skip
+		}
+
+		if err := subscriber.Client.SendMessage(noticeEvent); err != nil {
+			// Client is disconnected or channel is full, drop notice
+			log.Printf("Dropping topic deletion notice for client %s - %v", subscriber.ClientID, err)
 		}
 
 		// Remove from client mapping
@@ -140,7 +137,7 @@ func (ps *PubSubSystem) DeleteTopic(name string) error {
 }
 
 // Subscribe adds a client to a topic
-func (ps *PubSubSystem) Subscribe(clientID, topicName string, lastN int, writeChan chan EventResponse) ([]EventResponse, error) {
+func (ps *PubSubSystem) Subscribe(clientID, topicName string, lastN int, client ClientInterface) ([]EventResponse, error) {
 	// Check if topic exists
 	ps.topicsMutex.RLock()
 	topic, exists := ps.topics[topicName]
@@ -156,26 +153,6 @@ func (ps *PubSubSystem) Subscribe(clientID, topicName string, lastN int, writeCh
 		ps.clientTopics[clientID] = make(map[string]bool)
 	}
 	ps.clientTopics[clientID][topicName] = true
-	ps.clientMutex.Unlock()
-
-	// Register or get existing client
-	ps.clientMutex.Lock()
-	client, exists := ps.clients[clientID]
-	if !exists {
-		client = &PubSubClient{
-			ClientID:   clientID,
-			Buffer:     NewRingBuffer(DefaultBufferSize),
-			WriteChan:  writeChan,
-			LastActive: time.Now(),
-			Connected:  true,
-		}
-		ps.clients[clientID] = client
-	} else {
-		// Update existing client's write channel (for reconnections)
-		client.WriteChan = writeChan
-		client.Connected = true
-		client.LastActive = time.Now()
-	}
 	ps.clientMutex.Unlock()
 
 	// Add subscriber to topic
@@ -254,20 +231,16 @@ func (ps *PubSubSystem) Publish(topicName string, message MessageData, senderCli
 	topic.MessageHistory.Push(event)
 
 	for _, subscriber := range topic.Subscribers {
-		if !subscriber.Client.Connected {
+		// Check if client is still connected
+		if !subscriber.Client.IsConnected() {
 			continue
 		}
 
 		// Send message to all subscribers (including sender)
-		// Add to client's ring buffer for backpressure handling
-		subscriber.Client.Buffer.Push(event)
-
-		// Try to send immediately via write channel, don't block
-		select {
-		case subscriber.Client.WriteChan <- event:
-			subscriber.Client.LastActive = time.Now()
-		default:
-			// Write channel is full, message is in buffer for later retrieval
+		// Send directly to WebSocket client
+		if err := subscriber.Client.SendMessage(event); err != nil {
+			// Client is disconnected or channel is full, drop message
+			log.Printf("Dropping message for client %s - %v", subscriber.ClientID, err)
 		}
 	}
 	topic.mutex.Unlock()
@@ -394,11 +367,7 @@ func (ps *PubSubSystem) GetSubscriptionsStatus() SubscriptionsStatusResponse {
 func (ps *PubSubSystem) DisconnectClient(clientID string) {
 	ps.clientMutex.Lock()
 
-	// Mark client as disconnected
-	if client, exists := ps.clients[clientID]; exists {
-		client.Connected = false
-	}
-
+	// Remove client from topics mapping
 	topicsMap, exists := ps.clientTopics[clientID]
 	if exists {
 		delete(ps.clientTopics, clientID)

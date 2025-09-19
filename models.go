@@ -9,7 +9,7 @@ import (
 type SubscribeRequest struct {
 	Type      string `json:"type"`
 	Topic     string `json:"topic"`
-	ClientID  string `json:"client_id"`
+	ClientID  string `json:"client_id,omitempty"` // Optional - server generates if not provided
 	LastN     int    `json:"last_n,omitempty"`
 	RequestID string `json:"request_id"`
 }
@@ -17,7 +17,7 @@ type SubscribeRequest struct {
 type UnsubscribeRequest struct {
 	Type      string `json:"type"`
 	Topic     string `json:"topic"`
-	ClientID  string `json:"client_id"`
+	ClientID  string `json:"client_id,omitempty"` // Optional - server uses connection's client ID
 	RequestID string `json:"request_id"`
 }
 

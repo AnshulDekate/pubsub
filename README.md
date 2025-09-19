@@ -90,17 +90,19 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 │  │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  │                    CLIENT STRUCTURES                               │   │
 │  │  │                                                                     │   │
-│  │  │  PubSubClient: client1    PubSubClient: client2    PubSubClient: client3│
-│  │  │  ┌─────────────┐         ┌─────────────┐         ┌─────────────┐     │   │
-│  │  │  │ Buffer:     │         │ Buffer:     │         │ Buffer:     │     │   │
-│  │  │  │ RingBuffer  │         │ RingBuffer  │         │ RingBuffer  │     │   │
-│  │  │  │             │         │             │         │             │     │   │
-│  │  │  │ WriteChan:  │         │ WriteChan:  │         │ WriteChan:  │     │   │
-│  │  │  │ Channel     │         │ Channel     │         │ Channel     │     │   │
-│  │  │  │             │         │             │         │             │     │   │
-│  │  │  │ Connected:  │         │ Connected:  │         │ Connected:  │     │   │
-│  │  │  │ true        │         │ true        │         │ true        │     │   │
-│  │  │  └─────────────┘         └─────────────┘         └─────────────┘     │   │
+│  │  │  WebSocket Client: client1    WebSocket Client: client2            │   │
+│  │  │  ┌─────────────┐              ┌─────────────┐                      │   │
+│  │  │  │ ClientID:   │              │ ClientID:   │                      │   │
+│  │  │  │ UUID        │              │ UUID        │                      │   │
+│  │  │  │             │              │             │                      │   │
+│  │  │  │ MessageChan:│              │ MessageChan:│                      │   │
+│  │  │  │ Buffered    │              │ Buffered    │                      │   │
+│  │  │  │ Channel     │              │ Channel     │                      │   │
+│  │  │  │ (256 cap)   │              │ (256 cap)   │                      │   │
+│  │  │  │             │              │             │                      │   │
+│  │  │  │ Connection: │              │ Connection: │                      │   │
+│  │  │  │ WebSocket   │              │ WebSocket   │                      │   │
+│  │  │  └─────────────┘              └─────────────┘                      │   │
 │  │  └─────────────────────────────────────────────────────────────────────┘   │
 │  └─────────────────────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -110,24 +112,24 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  ┌─────────────────────────────────┐    ┌─────────────────────────────────┐    │
-│  │     Per-Client Ring Buffers     │    │     Per-Topic Ring Buffers       │    │
+│  │     Per-Topic Ring Buffers      │    │     WebSocket Message Channels   │    │
 │  │                                 │    │                                 │    │
-│  │  • Handle backpressure          │    │  • Store message history        │    │
-│  │  • Prevent memory overflow      │    │  • Enable last_n functionality │    │
-│  │  • Drop oldest messages        │    │  • Thread-safe operations        │    │
-│  │  • Thread-safe operations      │    │  • Bounded capacity             │    │
+│  │  • Store message history        │    │  • Handle backpressure          │    │
+│  │  • Enable last_n functionality │    │  • Prevent memory overflow      │    │
+│  │  • Thread-safe operations        │    │  • Drop messages if full        │    │
+│  │  • Bounded capacity             │    │  • Direct WebSocket integration │    │
 │  └─────────────────────────────────┘    └─────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
 MESSAGE FLOW:
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Client    │───▶│ WebSocket  │───▶│ PubSubSystem│───▶│ Fan-out to  │
-│  Publishes  │    │  Handler   │    │   Manager   │    │ Subscribers │
+│   Client    │───▶│ WebSocket  │───▶│ PubSubSystem│───▶│ Direct to   │
+│  Publishes  │    │  Handler   │    │   Manager   │    │ WebSocket   │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                                                                     │
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Client    │◀───│ Write Pump  │◀───│ Ring Buffer │◀───│   (except   │
-│  Receives   │    │             │    │             │    │   sender)   │
+│   Client    │◀───│ Write Pump  │◀───│ MessageChan │◀───│   (including │
+│  Receives   │    │             │    │             │    │   sender)    │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
@@ -144,27 +146,44 @@ MESSAGE FLOW:
 
 #### 3. **Data Structures**
 - **Topics Map**: `map[string]*Topic` - Topic name to Topic object mapping
-- **Clients Map**: `map[string]*PubSubClient` - Client ID to client object mapping  
 - **Client Topics Map**: `map[string]map[string]bool` - Client ID to set of subscribed topics
+- **Topic Subscribers**: `map[string]*Subscriber` - Client ID to WebSocket client mapping
 
-#### 4. **Storage Layer**
-- **Per-Client Ring Buffers**: Handle backpressure and concurrency
+#### 4. **Client Management**
+- **Auto-Generated Client IDs**: Each WebSocket connection gets a unique UUID
+- **Direct WebSocket Integration**: No intermediate client abstraction
+- **Connection-Based Status**: WebSocket connection itself indicates if client is online
+- **Simplified Message Flow**: Single buffered channel per WebSocket client
+
+#### 5. **Storage Layer**
 - **Per-Topic Ring Buffers**: Store message history for `last_n` functionality
+- **WebSocket Message Channels**: Buffered channels (256 capacity) for backpressure
+- **Direct Integration**: Messages sent directly to WebSocket clients
 
 ### Message Flow
 
-1. **Subscribe**: Client → WebSocket → PubSubSystem → Add to topic subscribers
-2. **Publish**: Client → WebSocket → PubSubSystem → Fan-out to all topic subscribers (except sender)
-3. **Fan-out**: PubSubSystem → Write Pump → Client Ring Buffer → Client WebSocket
+1. **Subscribe**: Client → WebSocket → PubSubSystem → Add WebSocket client to topic subscribers
+2. **Publish**: Client → WebSocket → PubSubSystem → Direct send to all topic subscribers (including sender)
+3. **Receive**: PubSubSystem → WebSocket MessageChan → Write Pump → Client
+4. **Disconnect**: WebSocket closes → PubSubSystem removes client from all topics
 
 ### Key Features
 
 - **Topic Isolation**: Messages published to one topic never reach subscribers of other topics
-- **No Echo-back**: Publishers never receive their own messages
+- **Echo-back**: Publishers receive their own messages (as requested)
 - **Concurrency Safety**: All operations are thread-safe with proper locking
-- **Backpressure**: Ring buffers prevent memory overflow by dropping oldest messages
+- **Backpressure**: Buffered channels prevent memory overflow by dropping messages if full
 - **Fan-out**: Every subscriber to a topic receives each message exactly once
+- **Direct Integration**: No intermediate client abstraction - WebSocket clients are used directly
+- **Connection-Based Status**: WebSocket connection itself indicates if client is online
 
+### Simplified Architecture Benefits
+
+- **No PubSubClient Layer**: WebSocket clients are used directly in the pub-sub system
+- **Reduced Complexity**: Eliminates intermediate client abstraction
+- **Better Performance**: Direct message sending without extra layers
+- **Cleaner Code**: Single client representation throughout the system
+- **Automatic Cleanup**: When WebSocket closes, client is automatically removed from topics
 
 ## Quick Start
 

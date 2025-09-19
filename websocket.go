@@ -37,27 +37,28 @@ type Client struct {
 	// The websocket connection
 	conn *websocket.Conn
 
-	// Buffered channel of outbound messages
-	send chan EventResponse
-
 	// Client ID for identification
 	clientID string
 
 	// Reference to pub-sub system
 	pubsub *PubSubSystem
+
+	// Buffered channel for sending messages (handles backpressure)
+	messageChan chan EventResponse
 }
 
 // NewClient creates a new client instance
 func NewClient(conn *websocket.Conn, pubsub *PubSubSystem) *Client {
+	clientID := uuid.New().String()
 	return &Client{
-		conn:     conn,
-		send:     make(chan EventResponse, 256),
-		clientID: "", // Will be set from first message with client_id
-		pubsub:   pubsub,
+		conn:        conn,
+		clientID:    clientID, // Generate client ID immediately on connection
+		pubsub:      pubsub,
+		messageChan: make(chan EventResponse, 256), // Buffered channel for backpressure
 	}
 }
 
-// readPump pumps messages from the websocket connection to the hub
+// readPump pumps messages from the websocket connection
 func (c *Client) readPump() {
 	defer func() {
 		c.cleanup()
@@ -80,7 +81,7 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Parse and handle the message
+		// Parse and handle the message directly
 		if err := c.handleMessage(message); err != nil {
 			log.Printf("Error handling message from client %s: %v", c.clientID, err)
 			// Send error response
@@ -102,11 +103,15 @@ func (c *Client) writePump() {
 		c.conn.Close()
 	}()
 
+	log.Printf("writePump started for client %s", c.clientID)
+
 	for {
 		select {
-		case message, ok := <-c.send:
+		case message, ok := <-c.messageChan:
+			log.Printf("Received message for client %s: %+v", c.clientID, message)
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				log.Printf("messageChan closed for client %s", c.clientID)
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -119,6 +124,7 @@ func (c *Client) writePump() {
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("Error sending ping to client %s: %v", c.clientID, err)
 				return
 			}
 		}
@@ -156,19 +162,10 @@ func (c *Client) handleSubscribe(req SubscribeRequest) error {
 		return ErrorData{Code: "BAD_REQUEST", Message: "request_id is required"}
 	}
 
-	// Handle client_id: use from connection if already set, or generate one
-	if c.clientID == "" {
-		if req.ClientID != "" {
-			c.clientID = req.ClientID
-		} else {
-			// Generate a client ID if not provided
-			c.clientID = uuid.New().String()
-		}
-	} else if req.ClientID != "" && c.clientID != req.ClientID {
-		return ErrorData{Code: "BAD_REQUEST", Message: "client_id mismatch with existing connection"}
-	}
+	// Client ID is already set when connection was established
+	log.Printf("Subscribing client %s to topic %s", c.clientID, req.Topic)
 
-	lastMessages, err := c.pubsub.Subscribe(c.clientID, req.Topic, req.LastN, c.send)
+	lastMessages, err := c.pubsub.Subscribe(c.clientID, req.Topic, req.LastN, c)
 	if err != nil {
 		// Send error response
 		errorResp := ErrorResponse{
@@ -248,17 +245,8 @@ func (c *Client) handlePublish(req PublishRequest) error {
 		return ErrorData{Code: "BAD_REQUEST", Message: "request_id is required"}
 	}
 
-	// Handle client_id: use from connection if already set, or generate one
-	if c.clientID == "" {
-		if req.ClientID != "" {
-			c.clientID = req.ClientID
-		} else {
-			// Generate a client ID if not provided
-			c.clientID = uuid.New().String()
-		}
-	} else if req.ClientID != "" && c.clientID != req.ClientID {
-		return ErrorData{Code: "BAD_REQUEST", Message: "client_id mismatch with existing connection"}
-	}
+	// Client ID is already set when connection was established
+	log.Printf("Publishing message from client %s to topic %s", c.clientID, req.Topic)
 
 	// Validate message ID is a valid UUID
 	if req.Message.ID == "" {
@@ -357,15 +345,33 @@ func (c *Client) sendMessage(message interface{}) error {
 		return ErrorData{Code: "INTERNAL_ERROR", Message: "Unknown message type to send"}
 	}
 
-	// Try to send message without blocking
 	select {
-	case c.send <- eventMsg:
+	case c.messageChan <- eventMsg:
+		log.Printf("Message sent to client %s: %+v", c.clientID, eventMsg)
 		return nil
 	default:
 		// Channel is full, client is slow
-		log.Printf("Client %s send channel is full, dropping message", c.clientID)
-		return ErrorData{Code: "CLIENT_OVERLOADED", Message: "Client send buffer is full"}
+		log.Printf("Client %s messageChan is full, dropping message", c.clientID)
+		return ErrorData{Code: "CLIENT_OVERLOADED", Message: "Client messageChan buffer is full"}
 	}
+}
+
+// ClientInterface implementation
+func (c *Client) GetClientID() string {
+	return c.clientID
+}
+
+func (c *Client) IsConnected() bool {
+	// Check if WebSocket connection is still alive
+	return c.conn != nil
+}
+
+func (c *Client) SendMessage(msg EventResponse) error {
+	return c.sendMessage(msg)
+}
+
+func (c *Client) GetLastActive() time.Time {
+	return time.Now() // WebSocket connection is active if it exists
 }
 
 // cleanup handles client disconnection
@@ -373,8 +379,8 @@ func (c *Client) cleanup() {
 	// Disconnect client from pub-sub system
 	c.pubsub.DisconnectClient(c.clientID)
 
-	// Close send channel
-	close(c.send)
+	// Close messageChan
+	close(c.messageChan)
 
 	log.Printf("Client %s disconnected", c.clientID)
 }
@@ -389,7 +395,7 @@ func HandleWebSocket(pubsub *PubSubSystem) http.HandlerFunc {
 		}
 
 		client := NewClient(conn, pubsub)
-		log.Printf("New client connected: %s", client.clientID)
+		log.Printf("New WebSocket client connected with ID: %s", client.clientID)
 
 		// Start read and write pumps in separate goroutines
 		go client.writePump()
