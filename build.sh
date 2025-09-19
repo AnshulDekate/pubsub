@@ -5,7 +5,7 @@ set -e
 
 PROJECT_NAME="chatroom"
 VERSION=${1:-latest}
-PORT=${2:-8080}
+PORT=${2:-9090}
 
 echo "🏗️  Building Chat Room System..."
 echo "📦 Project: $PROJECT_NAME"
@@ -98,10 +98,10 @@ case "${3:-run}" in
         echo "  restart - Restart container with rebuild"
         echo ""
         echo "Examples:"
-        echo "  $0                    # Build and run on port 8080"
+        echo "  $0                    # Build and run on port 9090"
         echo "  $0 v1.0 9090 run      # Build and run version v1.0 on port 9090"
-        echo "  $0 latest 8080 build  # Build only"
-        echo "  $0 latest 8080 logs   # Show logs"
+        echo "  $0 latest 9090 build  # Build only"
+        echo "  $0 latest 9090 logs   # Show logs"
         exit 1
         ;;
 esac

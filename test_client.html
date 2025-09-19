@@ -78,7 +78,7 @@
         function connect() {
             if (ws) return;
             
-            ws = new WebSocket('ws://localhost:8080/ws');
+            ws = new WebSocket('ws://localhost:9090/ws');
             
             ws.onopen = function() {
                 document.getElementById('status').textContent = 'Connected';

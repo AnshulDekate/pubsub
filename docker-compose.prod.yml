@@ -8,13 +8,13 @@ services:
     image: chatroom:latest
     container_name: chatroom-prod
     ports:
-      - "${PORT:-8080}:8080"
+      - "${PORT:-9090}:9090"
     environment:
-      - PORT=8080
+      - PORT=9090
       - GIN_MODE=release
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/health"]
       interval: 30s
       timeout: 10s
       retries: 3

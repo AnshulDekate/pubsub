@@ -177,7 +177,7 @@ MESSAGE FLOW:
 
 # Or manually with Docker
 docker build -t chatroom .
-docker run -p 8080:8080 chatroom
+docker run -p 9090:9090 chatroom
 ```
 
 2. **Using Docker Compose:**
@@ -201,7 +201,7 @@ go mod tidy
 go run .
 ```
 
-The server will start on port 8080 by default.
+The server will start on port 9090 by default.
 
 ## Testing
 
@@ -247,7 +247,7 @@ go test -v -race ./...
 
 ### WebSocket Messages
 
-Connect to WebSocket endpoint: `ws://localhost:8080/ws`
+Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 
 #### Subscribe to a topic
 ```json
@@ -441,7 +441,7 @@ Response:
 
 1. **Create a topic:**
 ```bash
-curl -X POST http://localhost:8080/topics \
+curl -X POST http://localhost:9090/topics \
   -H "Content-Type: application/json" \
   -d '{"name":"orders"}'
 ```
@@ -449,7 +449,7 @@ curl -X POST http://localhost:8080/topics \
 2. **Connect WebSocket client:**
 ```bash
 # Install websocat: brew install websocat
-websocat ws://localhost:8080/ws
+websocat ws://localhost:9090/ws
 ```
 
 3. **Subscribe to topic:**
@@ -473,7 +473,7 @@ The system supports multiple concurrent publishers and subscribers with:
 ## Configuration
 
 Environment variables:
-- `PORT` - Server port (default: 8080)
+- `PORT` - Server port (default: 9090)
 
 ## Performance Features
 

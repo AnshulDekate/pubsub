@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 PROJECT_NAME="chatroom"
-TEST_PORT="9091"
+TEST_PORT="9090"
 SERVER_PID=""
 
 # Function to print colored output

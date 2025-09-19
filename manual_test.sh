@@ -19,9 +19,9 @@ check_server() {
     if curl -s http://localhost:9090/health > /dev/null 2>&1; then
         echo -e "${GREEN}✅ Server is running on port 9090${NC}"
         return 0
-    elif curl -s http://localhost:8080/health > /dev/null 2>&1; then
-        echo -e "${GREEN}✅ Server is running on port 8080${NC}"
-        export PORT=8080
+    elif curl -s http://localhost:9090/health > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ Server is running on port 9090${NC}"
+        export PORT=9090
         return 0
     else
         echo -e "${YELLOW}❌ Server not running. Please start it first:${NC}"
