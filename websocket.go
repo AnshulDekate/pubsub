@@ -40,6 +40,9 @@ type Client struct {
 	// Buffered channel of outbound messages
 	send chan EventResponse
 
+	// Buffered channel of inbound messages
+	receive chan []byte
+
 	// Client ID for identification
 	clientID string
 
@@ -52,16 +55,18 @@ func NewClient(conn *websocket.Conn, pubsub *PubSubSystem) *Client {
 	return &Client{
 		conn:     conn,
 		send:     make(chan EventResponse, 256),
+		receive:  make(chan []byte, 256),
 		clientID: "", // Will be set from first message with client_id
 		pubsub:   pubsub,
 	}
 }
 
-// readPump pumps messages from the websocket connection to the hub
+// readPump pumps messages from the websocket connection to the receive buffer
 func (c *Client) readPump() {
 	defer func() {
 		c.cleanup()
 		c.conn.Close()
+		close(c.receive)
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -80,16 +85,42 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Parse and handle the message
-		if err := c.handleMessage(message); err != nil {
-			log.Printf("Error handling message from client %s: %v", c.clientID, err)
-			// Send error response
-			errorResp := ErrorResponse{
-				Type:      "error",
-				Error:     ErrorData{Code: "PROCESSING_ERROR", Message: err.Error()},
-				Timestamp: time.Now(),
+		// Buffer the incoming message for backpressure handling
+		select {
+		case c.receive <- message:
+			// Message buffered successfully
+		default:
+			// Receive buffer is full, drop the message
+			log.Printf("Receive buffer full, dropping message from client %s", c.clientID)
+		}
+	}
+}
+
+// processPump processes buffered incoming messages
+func (c *Client) processPump() {
+	defer func() {
+		c.cleanup()
+	}()
+
+	for {
+		select {
+		case message, ok := <-c.receive:
+			if !ok {
+				// Receive channel closed
+				return
 			}
-			c.sendMessage(errorResp)
+
+			// Parse and handle the message
+			if err := c.handleMessage(message); err != nil {
+				log.Printf("Error handling message from client %s: %v", c.clientID, err)
+				// Send error response
+				errorResp := ErrorResponse{
+					Type:      "error",
+					Error:     ErrorData{Code: "PROCESSING_ERROR", Message: err.Error()},
+					Timestamp: time.Now(),
+				}
+				c.sendMessage(errorResp)
+			}
 		}
 	}
 }
@@ -387,8 +418,9 @@ func HandleWebSocket(pubsub *PubSubSystem) http.HandlerFunc {
 		client := NewClient(conn, pubsub)
 		log.Printf("New client connected: %s", client.clientID)
 
-		// Start read and write pumps in separate goroutines
-		go client.writePump()
+		// Start read, process, and write pumps in separate goroutines
 		go client.readPump()
+		go client.processPump()
+		go client.writePump()
 	}
 }
