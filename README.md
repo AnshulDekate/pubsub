@@ -483,14 +483,6 @@ Environment variables:
 - **Connection Isolation**: Each WebSocket connection handled independently
 - **Graceful Degradation**: System continues operating even if individual clients fail
 
-## Backpressure Implementation
-
-**Client Receive Buffer handles backpressure:**
-- Each WebSocket client has a 256-message receive buffer
-- When buffer is full, incoming messages are dropped
-- Prevents slow message processing from blocking WebSocket reads
-- Per-client isolation ensures one slow client doesn't affect others
-
 ## Implementation Details
 
 - **No Hub Pattern**: Each client connection is handled directly without a central hub
