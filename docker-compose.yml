@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  chatroom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chatroom:latest
+    container_name: chatroom-server
+    ports:
+      - "9090:9090"
+    environment:
+      - PORT=9090
+      - GIN_MODE=release
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.chatroom.description=Chat Room Pub-Sub System"
+      - "com.chatroom.version=1.0"
+    networks:
+      - chatroom-network
+
+networks:
+  chatroom-network:
+    driver: bridge
+    name: chatroom-net

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Room Test Client</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; }
+        .section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        textarea { width: 100%; height: 100px; }
+        button { margin: 5px; padding: 5px 10px; }
+        #messages { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; background: #f9f9f9; }
+        .message { margin: 5px 0; padding: 5px; background: white; border-radius: 3px; }
+        .error { color: red; }
+        .success { color: green; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Chat Room Test Client</h1>
+        
+        <div class="section">
+            <h3>Connection Status: <span id="status">Disconnected</span></h3>
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+
+        <div class="section">
+            <h3>Topic Management</h3>
+            <input type="text" id="topicName" placeholder="Topic name" value="orders">
+            <button onclick="createTopic()">Create Topic</button>
+            <button onclick="deleteTopic()">Delete Topic</button>
+            <button onclick="listTopics()">List Topics</button>
+        </div>
+
+        <div class="section">
+            <h3>Subscription</h3>
+            <input type="text" id="subTopic" placeholder="Topic to subscribe" value="orders">
+            <input type="number" id="lastN" placeholder="Last N messages" value="5">
+            <button onclick="subscribe()">Subscribe</button>
+            <button onclick="unsubscribe()">Unsubscribe</button>
+        </div>
+
+        <div class="section">
+            <h3>Publishing</h3>
+            <input type="text" id="pubTopic" placeholder="Topic to publish" value="orders">
+            <textarea id="messagePayload" placeholder='{"order_id": "ORD-123", "amount": 99.5, "currency": "USD"}'></textarea>
+            <button onclick="publish()">Publish Message</button>
+        </div>
+
+        <div class="section">
+            <h3>System</h3>
+            <button onclick="ping()">Ping Server</button>
+            <button onclick="getHealth()">Get Health</button>
+            <button onclick="getStats()">Get Stats</button>
+        </div>
+
+        <div class="section">
+            <h3>Messages</h3>
+            <button onclick="clearMessages()">Clear</button>
+            <div id="messages"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let clientId = 'client_' + Math.random().toString(36).substr(2, 9);
+        
+        function addMessage(message, type = 'info') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = `<strong>${new Date().toLocaleTimeString()}</strong>: ${JSON.stringify(message, null, 2)}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function connect() {
+            if (ws) return;
+            
+            ws = new WebSocket('ws://localhost:8080/ws');
+            
+            ws.onopen = function() {
+                document.getElementById('status').textContent = 'Connected';
+                addMessage('Connected to server', 'success');
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    const type = message.type === 'error' ? 'error' : 'info';
+                    addMessage(message, type);
+                } catch (e) {
+                    addMessage('Invalid message: ' + event.data, 'error');
+                }
+            };
+            
+            ws.onclose = function() {
+                document.getElementById('status').textContent = 'Disconnected';
+                addMessage('Disconnected from server', 'error');
+                ws = null;
+            };
+            
+            ws.onerror = function(error) {
+                addMessage('WebSocket error: ' + error, 'error');
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function sendMessage(message) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('Not connected to server', 'error');
+                return;
+            }
+            
+            ws.send(JSON.stringify(message));
+            addMessage('Sent: ' + JSON.stringify(message), 'success');
+        }
+
+        function subscribe() {
+            const topic = document.getElementById('subTopic').value;
+            const lastN = parseInt(document.getElementById('lastN').value) || 0;
+            
+            sendMessage({
+                type: 'subscribe',
+                topic: topic,
+                client_id: clientId,
+                last_n: lastN,
+                request_id: generateId()
+            });
+        }
+
+        function unsubscribe() {
+            const topic = document.getElementById('subTopic').value;
+            
+            sendMessage({
+                type: 'unsubscribe',
+                topic: topic,
+                client_id: clientId,
+                request_id: generateId()
+            });
+        }
+
+        function publish() {
+            const topic = document.getElementById('pubTopic').value;
+            const payloadText = document.getElementById('messagePayload').value;
+            
+            let payload;
+            try {
+                payload = payloadText ? JSON.parse(payloadText) : {};
+            } catch (e) {
+                addMessage('Invalid JSON payload', 'error');
+                return;
+            }
+            
+            sendMessage({
+                type: 'publish',
+                topic: topic,
+                message: {
+                    id: generateId(),
+                    payload: payload
+                },
+                request_id: generateId()
+            });
+        }
+
+        function ping() {
+            sendMessage({
+                type: 'ping',
+                request_id: generateId()
+            });
+        }
+
+        function createTopic() {
+            const topicName = document.getElementById('topicName').value;
+            
+            fetch('/topics', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: topicName})
+            })
+            .then(response => response.json())
+            .then(data => addMessage('Create topic response: ' + JSON.stringify(data), 'success'))
+            .catch(error => addMessage('Error creating topic: ' + error, 'error'));
+        }
+
+        function deleteTopic() {
+            const topicName = document.getElementById('topicName').value;
+            
+            fetch(`/topics/${topicName}`, {method: 'DELETE'})
+            .then(response => response.json())
+            .then(data => addMessage('Delete topic response: ' + JSON.stringify(data), 'success'))
+            .catch(error => addMessage('Error deleting topic: ' + error, 'error'));
+        }
+
+        function listTopics() {
+            fetch('/topics')
+            .then(response => response.json())
+            .then(data => addMessage('Topics: ' + JSON.stringify(data), 'success'))
+            .catch(error => addMessage('Error listing topics: ' + error, 'error'));
+        }
+
+        function getHealth() {
+            fetch('/health')
+            .then(response => response.json())
+            .then(data => addMessage('Health: ' + JSON.stringify(data), 'success'))
+            .catch(error => addMessage('Error getting health: ' + error, 'error'));
+        }
+
+        function getStats() {
+            fetch('/stats')
+            .then(response => response.json())
+            .then(data => addMessage('Stats: ' + JSON.stringify(data), 'success'))
+            .catch(error => addMessage('Error getting stats: ' + error, 'error'));
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        function generateId() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+    </script>
+</body>
+</html>

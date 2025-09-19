@@ -1,0 +1,35 @@
+# Chat Room System Configuration Template
+# Copy this to .env for docker-compose
+
+# Server Configuration
+PORT=8080
+GIN_MODE=release
+
+# Docker Configuration
+COMPOSE_PROJECT_NAME=chatroom
+DOCKER_IMAGE_NAME=chatroom
+DOCKER_IMAGE_TAG=latest
+
+# Resource Limits (for production)
+CPU_LIMIT=1.0
+MEMORY_LIMIT=512M
+CPU_RESERVATION=0.25
+MEMORY_RESERVATION=128M
+
+# Logging
+LOG_LEVEL=info
+LOG_MAX_SIZE=10m
+LOG_MAX_FILES=3
+
+# Network Configuration
+NETWORK_NAME=chatroom-net
+
+# Optional: SSL Configuration (if using nginx proxy)
+SSL_CERT_PATH=./ssl/cert.pem
+SSL_KEY_PATH=./ssl/key.pem
+
+# Optional: External URLs (for production deployment)
+EXTERNAL_HOST=localhost
+EXTERNAL_PORT=80
+WEBSOCKET_URL=ws://localhost/ws
+API_URL=http://localhost
