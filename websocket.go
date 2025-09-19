@@ -341,6 +341,14 @@ func (c *Client) sendMessage(message interface{}) error {
 			Message:   MessageData{ID: msg.RequestID, Payload: "pong"},
 			Timestamp: msg.Timestamp,
 		}
+	case InfoResponse:
+		// Convert InfoResponse to EventResponse format
+		eventMsg = EventResponse{
+			Type:      msg.Type,
+			Topic:     msg.Topic,
+			Message:   MessageData{ID: "", Payload: msg.Message},
+			Timestamp: msg.Timestamp,
+		}
 	default:
 		return ErrorData{Code: "INTERNAL_ERROR", Message: "Unknown message type to send"}
 	}
@@ -366,7 +374,7 @@ func (c *Client) IsConnected() bool {
 	return c.conn != nil
 }
 
-func (c *Client) SendMessage(msg EventResponse) error {
+func (c *Client) SendMessage(msg interface{}) error {
 	return c.sendMessage(msg)
 }
 

@@ -5,8 +5,6 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -18,7 +16,7 @@ const (
 type ClientInterface interface {
 	GetClientID() string
 	IsConnected() bool
-	SendMessage(EventResponse) error
+	SendMessage(interface{}) error
 	GetLastActive() time.Time
 }
 
@@ -97,6 +95,7 @@ func (ps *PubSubSystem) DeleteTopic(name string) error {
 
 	// Notify all subscribers about topic deletion
 	topic.mutex.Lock()
+	log.Printf("Topic %s has %d subscribers to notify", name, len(topic.Subscribers))
 	for _, subscriber := range topic.Subscribers {
 		// Send topic deletion notice
 		notice := InfoResponse{
@@ -106,17 +105,12 @@ func (ps *PubSubSystem) DeleteTopic(name string) error {
 			Timestamp: time.Now(),
 		}
 
-		// Send notice to client
-		noticeEvent := EventResponse{
-			Type:      notice.Type,
-			Topic:     notice.Topic,
-			Message:   MessageData{ID: uuid.New().String(), Payload: notice.Message},
-			Timestamp: notice.Timestamp,
-		}
-
-		if err := subscriber.Client.SendMessage(noticeEvent); err != nil {
+		log.Printf("Sending topic deletion notice to client %s", subscriber.ClientID)
+		if err := subscriber.Client.SendMessage(notice); err != nil {
 			// Client is disconnected or channel is full, drop notice
 			log.Printf("Dropping topic deletion notice for client %s - %v", subscriber.ClientID, err)
+		} else {
+			log.Printf("Successfully sent topic deletion notice to client %s", subscriber.ClientID)
 		}
 
 		// Remove from client mapping
