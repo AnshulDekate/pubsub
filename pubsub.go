@@ -253,17 +253,12 @@ func (ps *PubSubSystem) Publish(topicName string, message MessageData, senderCli
 	// Add message to topic's history for last_n functionality
 	topic.MessageHistory.Push(event)
 
-	// Fan out to all subscribers except the sender (isolation - only this topic's subscribers)
-	for clientID, subscriber := range topic.Subscribers {
+	for _, subscriber := range topic.Subscribers {
 		if !subscriber.Client.Connected {
 			continue
 		}
 
-		// Skip sending message back to the sender
-		if clientID == senderClientID {
-			continue
-		}
-
+		// Send message to all subscribers (including sender)
 		// Add to client's ring buffer for backpressure handling
 		subscriber.Client.Buffer.Push(event)
 

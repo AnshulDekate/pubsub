@@ -151,18 +151,20 @@ func (c *Client) handleMessage(data []byte) error {
 
 // handleSubscribe processes subscribe requests
 func (c *Client) handleSubscribe(req SubscribeRequest) error {
-	// Validate request ID and client ID
+	// Validate request ID
 	if req.RequestID == "" {
 		return ErrorData{Code: "BAD_REQUEST", Message: "request_id is required"}
 	}
-	if req.ClientID == "" {
-		return ErrorData{Code: "BAD_REQUEST", Message: "client_id is required"}
-	}
 
-	// Set client ID from the message (store in connection for future use)
+	// Handle client_id: use from connection if already set, or generate one
 	if c.clientID == "" {
-		c.clientID = req.ClientID
-	} else if c.clientID != req.ClientID {
+		if req.ClientID != "" {
+			c.clientID = req.ClientID
+		} else {
+			// Generate a client ID if not provided
+			c.clientID = uuid.New().String()
+		}
+	} else if req.ClientID != "" && c.clientID != req.ClientID {
 		return ErrorData{Code: "BAD_REQUEST", Message: "client_id mismatch with existing connection"}
 	}
 
@@ -246,12 +248,14 @@ func (c *Client) handlePublish(req PublishRequest) error {
 		return ErrorData{Code: "BAD_REQUEST", Message: "request_id is required"}
 	}
 
-	// Handle client_id: use from connection if already set, or set it from the request
+	// Handle client_id: use from connection if already set, or generate one
 	if c.clientID == "" {
-		if req.ClientID == "" {
-			return ErrorData{Code: "BAD_REQUEST", Message: "client_id is required for first message on this connection"}
+		if req.ClientID != "" {
+			c.clientID = req.ClientID
+		} else {
+			// Generate a client ID if not provided
+			c.clientID = uuid.New().String()
 		}
-		c.clientID = req.ClientID
 	} else if req.ClientID != "" && c.clientID != req.ClientID {
 		return ErrorData{Code: "BAD_REQUEST", Message: "client_id mismatch with existing connection"}
 	}
