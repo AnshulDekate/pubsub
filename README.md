@@ -7,7 +7,7 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 - **Real-time messaging** via WebSockets
 - **Pub-sub architecture** with topic-based isolation
 - **Concurrency safety** for multiple publishers/subscribers
-- **Backpressure handling** using ring buffers with bounded per-subscriber queues
+- **Backpressure handling** using buffered channels
 - **Fan-out messaging** - every subscriber receives each message once
 - **No hub concept** - direct connection handling per client
 - **HTTP REST API** for topic management
@@ -64,13 +64,13 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 │  │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  │                    DATA STRUCTURES                                │   │
 │  │  │                                                                     │   │
-│  │  │  Topics Map:           Clients Map:        Client Topics Map:      │   │
-│  │  │  topic → Topic         clientID → Client   clientID → Set<Topics>  │   │
-│  │  │  ┌─────────────┐      ┌─────────────┐     ┌─────────────┐         │   │
-│  │  │  │ "orders"    │      │ "client1"   │     │ "client1"   │         │   │
-│  │  │  │ "notifications"│   │ "client2"   │     │ "client2"   │         │   │
-│  │  │  │ "general"   │      │ "client3"   │     │ "client3"   │         │   │
-│  │  │  └─────────────┘      └─────────────┘     └─────────────┘         │   │
+│  │  │  Topics Map:           Client Topics Map:                           │   │
+│  │  │  topic → Topic         clientID → Set<Topics>                      │   │
+│  │  │  ┌─────────────┐      ┌─────────────┐                             │   │
+│  │  │  │ "orders"    │      │ "client1"   │                             │   │
+│  │  │  │ "notifications"│   │ "client2"   │                             │   │
+│  │  │  │ "general"   │      │ "client3"   │                             │   │
+│  │  │  └─────────────┘      └─────────────┘                             │   │
 │  │  └─────────────────────────────────────────────────────────────────────┘   │
 │  │                              │                                             │
 │  │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -82,13 +82,13 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 │  │  │  │ • client1   │       │ • client2  │         │ • client1  │     │   │
 │  │  │  │ • client2   │       │ • client3  │         │ • client3  │     │   │
 │  │  │  │             │       │             │         │             │     │   │
-│  │  │  │ MessageHist:│       │ MessageHist:│         │ MessageHist:│     │   │
-│  │  │  │ RingBuffer  │       │ RingBuffer  │         │ RingBuffer  │     │   │
+│  │  │  │ MessageCount:│       │ MessageCount:│       │ MessageCount:│     │   │
+│  │  │  │ 42           │       │ 15          │       │ 8           │     │   │
 │  │  │  └─────────────┘       └─────────────┘         └─────────────┘     │   │
 │  │  └─────────────────────────────────────────────────────────────────────┘   │
 │  │                              │                                             │
 │  │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  │                    CLIENT STRUCTURES                               │   │
+│  │  │                    WEBSOCKET CLIENTS                               │   │
 │  │  │                                                                     │   │
 │  │  │  WebSocket Client: client1    WebSocket Client: client2            │   │
 │  │  │  ┌─────────────┐              ┌─────────────┐                      │   │
@@ -106,30 +106,16 @@ A high-performance pub-sub chat room system built in Go with WebSocket support, 
 │  │  └─────────────────────────────────────────────────────────────────────┘   │
 │  └─────────────────────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              STORAGE LAYER                                     │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌─────────────────────────────────┐    ┌─────────────────────────────────┐    │
-│  │     Per-Topic Ring Buffers      │    │     WebSocket Message Channels   │    │
-│  │                                 │    │                                 │    │
-│  │  • Store message history        │    │  • Handle backpressure          │    │
-│  │  • Enable last_n functionality │    │  • Prevent memory overflow      │    │
-│  │  • Thread-safe operations        │    │  • Drop messages if full        │    │
-│  │  • Bounded capacity             │    │  • Direct WebSocket integration │    │
-│  └─────────────────────────────────┘    └─────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────────┘
 
 MESSAGE FLOW:
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Client    │───▶│ WebSocket  │───▶│ PubSubSystem│───▶│ Direct to   │
-│  Publishes  │    │  Handler   │    │   Manager   │    │ WebSocket   │
+│  Publishes  │    │  Handler   │    │   Manager   │    │ Subscribers │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                                                                     │
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Client    │◀───│ Write Pump  │◀───│ MessageChan │◀───│   (including │
-│  Receives   │    │             │    │             │    │   sender)    │
+│   Client    │◀───│ Write Pump  │◀───│ MessageChan │◀───│             │
+│  Receives   │    │             │    │             │    │             │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
@@ -156,21 +142,21 @@ MESSAGE FLOW:
 - **Simplified Message Flow**: Single buffered channel per WebSocket client
 
 #### 5. **Storage Layer**
-- **Per-Topic Ring Buffers**: Store message history for `last_n` functionality
 - **WebSocket Message Channels**: Buffered channels (256 capacity) for backpressure
 - **Direct Integration**: Messages sent directly to WebSocket clients
+- **No Message History**: Messages are not stored, only forwarded
 
 ### Message Flow
 
 1. **Subscribe**: Client → WebSocket → PubSubSystem → Add WebSocket client to topic subscribers
-2. **Publish**: Client → WebSocket → PubSubSystem → Direct send to all topic subscribers (including sender)
+2. **Publish**: Client → WebSocket → PubSubSystem → Direct send to all topic subscribers (excluding sender)
 3. **Receive**: PubSubSystem → WebSocket MessageChan → Write Pump → Client
 4. **Disconnect**: WebSocket closes → PubSubSystem removes client from all topics
 
 ### Key Features
 
 - **Topic Isolation**: Messages published to one topic never reach subscribers of other topics
-- **Echo-back**: Publishers receive their own messages (as requested)
+- **No Echo-back**: Publishers never receive their own messages
 - **Concurrency Safety**: All operations are thread-safe with proper locking
 - **Backpressure**: Buffered channels prevent memory overflow by dropping messages if full
 - **Fan-out**: Every subscriber to a topic receives each message exactly once
@@ -184,6 +170,7 @@ MESSAGE FLOW:
 - **Better Performance**: Direct message sending without extra layers
 - **Cleaner Code**: Single client representation throughout the system
 - **Automatic Cleanup**: When WebSocket closes, client is automatically removed from topics
+- **No Message Persistence**: Messages are not stored, reducing memory usage
 
 ## Quick Start
 
@@ -220,76 +207,35 @@ go mod tidy
 go run .
 ```
 
-The server will start on port 9090 by default.
-
-## Testing
-
-### Quick Validation
-```bash
-# Validate system is working correctly
-./validate_system.sh
+3. **Server will start on port 9090:**
 ```
-
-### Comprehensive Test Suite
-```bash
-# Run all tests (unit + integration + performance)
-./run_tests.sh all
-
-# Run specific test suites
-./run_tests.sh unit        # Unit tests only
-./run_tests.sh http        # HTTP API tests
-./run_tests.sh websocket   # WebSocket tests
-./run_tests.sh pubsub      # Pub-sub integration tests
-./run_tests.sh performance # Performance tests
-```
-
-### Manual Testing
-```bash
-# Start server
-go run .
-
-# In another terminal, run guided manual tests
-./manual_test.sh
-```
-
-### Unit Tests
-```bash
-# Run with coverage
-go test -v -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out -o coverage.html
-
-# Run with race detection
-go test -v -race ./...
+Server starting on :9090
 ```
 
 ## API Reference
 
 ### WebSocket Messages
 
-Connect to WebSocket endpoint: `ws://localhost:9090/ws`
-
-#### Subscribe to a topic
+#### Subscribe to Topic
 ```json
 {
   "type": "subscribe",
   "topic": "orders",
-  "client_id": "s1",
   "last_n": 5,
   "request_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-#### Unsubscribe from current topic
+#### Unsubscribe from Topic
 ```json
 {
   "type": "unsubscribe",
   "topic": "orders",
-  "client_id": "s1",
   "request_id": "340e8400-e29b-41d4-a716-4466554480098"
 }
 ```
 
-#### Publish message to topic
+#### Publish Message
 ```json
 {
   "type": "publish",
@@ -306,7 +252,7 @@ Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 }
 ```
 
-#### Ping server
+#### Ping
 ```json
 {
   "type": "ping",
@@ -314,7 +260,7 @@ Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 }
 ```
 
-### WebSocket Responses
+### Response Messages
 
 #### Acknowledgment
 ```json
@@ -327,7 +273,7 @@ Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 }
 ```
 
-#### Event (message received)
+#### Event
 ```json
 {
   "type": "event",
@@ -357,7 +303,7 @@ Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 }
 ```
 
-#### Pong response
+#### Pong
 ```json
 {
   "type": "pong",
@@ -366,146 +312,100 @@ Connect to WebSocket endpoint: `ws://localhost:9090/ws`
 }
 ```
 
-#### Server notifications
-```json
-{
-  "type": "info",
-  "msg": "ping",
-  "ts": "2025-08-25T10:04:00Z"
-}
-```
-
-```json
-{
-  "type": "info",
-  "topic": "orders",
-  "msg": "topic_deleted",
-  "ts": "2025-08-25T10:05:00Z"
-}
-```
-
 ### HTTP REST API
 
 #### Create Topic
-```bash
-POST /topics
-Content-Type: application/json
-
-{"name": "orders"}
-```
-
-Response (201 Created or 409 Conflict):
-```json
-{"status": "created", "topic": "orders"}
-```
-
-#### Delete Topic
-```bash
-DELETE /topics/orders
-```
-
-Response (200 OK or 404 Not Found):
-```json
-{"status": "deleted", "topic": "orders"}
-```
-
-#### List Topics
-```bash
-GET /topics
-```
-
-Response:
-```json
-{
-  "topics": [
-    {"name": "orders", "subscribers": 3}
-  ]
-}
-```
-
-#### Health Check
-```bash
-GET /health
-```
-
-Response:
-```json
-{
-  "uptime_sec": 123,
-  "topics": 2,
-  "subscribers": 4
-}
-```
-
-#### Statistics
-```bash
-GET /stats
-```
-
-Response:
-```json
-{
-  "topics": {
-    "orders": {
-      "messages": 42,
-      "subscribers": 3
-    }
-  }
-}
-```
-
-## Testing
-
-### Using curl and websocat
-
-1. **Create a topic:**
 ```bash
 curl -X POST http://localhost:9090/topics \
   -H "Content-Type: application/json" \
   -d '{"name":"orders"}'
 ```
 
-2. **Connect WebSocket client:**
+#### List Topics
 ```bash
-# Install websocat: brew install websocat
-websocat ws://localhost:9090/ws
+curl http://localhost:9090/topics
+```
+
+#### Delete Topic
+```bash
+curl -X DELETE http://localhost:9090/topics/orders
+```
+
+#### Health Check
+```bash
+curl http://localhost:9090/health
+```
+
+#### Statistics
+```bash
+curl http://localhost:9090/stats
+```
+
+#### Subscriptions Status
+```bash
+curl http://localhost:9090/subscriptions
+```
+
+## Testing
+
+### WebSocket Testing with wscat
+
+1. **Install wscat:**
+```bash
+npm install -g wscat
+```
+
+2. **Connect to WebSocket:**
+```bash
+wscat -c ws://localhost:9090/ws
 ```
 
 3. **Subscribe to topic:**
 ```json
-{"type":"subscribe","topic":"orders","client_id":"client1","request_id":"req1"}
+{"type":"subscribe","topic":"test","request_id":"sub-1"}
 ```
 
 4. **Publish message:**
 ```json
-{"type":"publish","topic":"orders","message":{"id":"550e8400-e29b-41d4-a716-446655440000","payload":{"test":"message"}},"request_id":"req2"}
+{"type":"publish","topic":"test","message":{"id":"550e8400-e29b-41d4-a716-446655440000","payload":{"text":"Hello World"}},"request_id":"pub-1"}
 ```
 
-### Load Testing
+### Docker Testing
 
-The system supports multiple concurrent publishers and subscribers with:
-- Concurrency-safe operations using mutexes
-- Bounded message queues to prevent memory leaks
-- Non-blocking fan-out to prevent slow clients from affecting others
-- Automatic cleanup on client disconnect
+1. **Build and run:**
+```bash
+docker build -t chatroom .
+docker run -p 9090:9090 chatroom
+```
 
-## Configuration
+2. **Test with curl:**
+```bash
+curl http://localhost:9090/health
+```
 
-Environment variables:
-- `PORT` - Server port (default: 9090)
+## Development
 
-## Performance Features
+### Project Structure
+```
+├── main.go              # Server entry point
+├── models.go            # Data structures and message types
+├── pubsub.go            # Core pub-sub system
+├── websocket.go         # WebSocket handling
+├── handlers.go          # HTTP handlers
+├── ringbuffer.go        # Ring buffer implementation
+├── Dockerfile           # Docker configuration
+├── docker-compose.yml   # Docker Compose for development
+├── docker-compose.prod.yml # Docker Compose for production
+├── build.sh             # Build script
+└── README.md            # This file
+```
 
-- **Ring Buffer Backpressure**: Bounded per-subscriber queues drop oldest messages on overflow
-- **Non-blocking Operations**: Slow clients don't affect message delivery to other clients
-- **Efficient Fan-out**: Direct topic-to-subscribers mapping for O(1) lookup
-- **Connection Isolation**: Each WebSocket connection handled independently
-- **Graceful Degradation**: System continues operating even if individual clients fail
+### Key Design Decisions
 
-## Implementation Details
+1. **No Message Persistence**: Messages are not stored, only forwarded to active subscribers
+2. **Direct WebSocket Integration**: No intermediate client abstraction
+3. **Buffered Channels**: Backpressure handled at WebSocket client level
+4. **Auto-Generated Client IDs**: Each connection gets a unique UUID
+5. **Connection-Based Status**: WebSocket connection indicates if client is online
 
-- **No Hub Pattern**: Each client connection is handled directly without a central hub
-- **Separate Read/Write Pumps**: Each WebSocket connection has dedicated goroutines for reading and writing
-- **Message Validation**: UUID validation for message IDs, proper error handling
-- **Topic Isolation**: No cross-topic message leakage
-- **Concurrent Safety**: All shared data structures protected by appropriate locks
+
